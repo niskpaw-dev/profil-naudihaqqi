@@ -970,10 +970,21 @@
     org: 'SMK Jugra',
     address: 'Jalan Sultan Abdul Samad, 42700 Banting, Selangor',
     url: location.href,
-    // Banting, Selangor coords
-    lat: 2.8181,
+
+    /* === WAKTU SOLAT — TUKAR API DI SINI === */
+    prayerApi: 'waktusolat',   // Pilihan: 'waktusolat' | 'aladhan' | 'esolat'
+    prayerZone: 'SGR03',        // Zon JAKIM: SGR03 = Klang, Kuala Langat (Banting)
+    lat: 2.8181,                // Untuk Aladhan (Banting)
     lng: 101.5030,
   };
+
+  /*
+    === PANDUAN ZON JAKIM (SELANGOR) ===
+    SGR01 — Gombak, Petaling, Sepang, Hulu Langat, Hulu Selangor, S.Alam
+    SGR02 — Kuala Selangor, Sabak Bernam
+    SGR03 — Klang, Kuala Langat (Banting) ← SEMASA
+    Senarai penuh: https://api.waktusolat.app/zones
+  */
 
   /* =========================================================
      HAPTIC HELPER
@@ -1312,39 +1323,53 @@
   });
 
   /* =========================================================
-     PRAYER TIMES (Aladhan API — Banting, Selangor)
+     PRAYER TIMES (api.waktusolat.app — Zon SGR03 Kuala Langat)
+     API returns whole month with Unix timestamps.
   ========================================================= */
   async function loadPrayerTimes() {
     try {
-      const d = new Date();
-      const dateStr = `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`;
-      const res = await fetch(`https://api.waktusolat.app/v2/solat/SGR03/${dateStr}?latitude=${CONFIG.lat}&longitude=${CONFIG.lng}&method=3`);
+      const res = await fetch('https://api.waktusolat.app/v2/solat/SGR03');
       if (!res.ok) throw new Error('fetch failed');
       const json = await res.json();
-      const t = json.data.timings;
+
+      const today = new Date();
+      const todayDay = today.getDate();
+
+      // Find today's prayer entry
+      const todayData = (json.prayers || []).find(p => p.day === todayDay);
+      if (!todayData) throw new Error('No data for today');
+
+      // Convert Unix timestamp (seconds) → HH:MM in local time
+      const tsToTime = (ts) => {
+        const d = new Date(ts * 1000);
+        return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+      };
+
       const prayers = [
-        { name: 'Subuh', time: t.Fajr, enName: 'Fajr', arName: 'الفجر' },
-        { name: 'Syuruk', time: t.Sunrise, enName: 'Sunrise', arName: 'الشروق' },
-        { name: 'Zohor', time: t.Dhuhr, enName: 'Dhuhr', arName: 'الظهر' },
-        { name: 'Asar', time: t.Asr, enName: 'Asr', arName: 'العصر' },
-        { name: 'Maghrib', time: t.Maghrib, enName: 'Maghrib', arName: 'المغرب' },
-        { name: 'Isyak', time: t.Isha, enName: 'Isha', arName: 'العشاء' }
-      ];
-      const now = new Date();
-      const nowMin = now.getHours() * 60 + now.getMinutes();
-      let next = prayers[0];
-      for (const p of prayers) {
-        const [h, m] = p.time.split(':').map(Number);
-        if (h * 60 + m > nowMin) { next = p; break; }
-      }
-      document.getElementById('prayerName').dataset.ms = next.name;
-      document.getElementById('prayerName').dataset.en = next.enName;
-      document.getElementById('prayerName').dataset.ar = next.arName;
-      document.getElementById('prayerName').textContent = next[currentLang === 'en' ? 'enName' : currentLang === 'ar' ? 'arName' : 'name'] || next.name;
+        { name: 'Subuh',   ts: todayData.fajr,    enName: 'Fajr',    arName: 'الفجر' },
+        { name: 'Syuruk',  ts: todayData.syuruk,  enName: 'Sunrise', arName: 'الشروق' },
+        { name: 'Zohor',   ts: todayData.dhuhr,   enName: 'Dhuhr',   arName: 'الظهر' },
+        { name: 'Asar',    ts: todayData.asr,     enName: 'Asr',     arName: 'العصر' },
+        { name: 'Maghrib', ts: todayData.maghrib, enName: 'Maghrib', arName: 'المغرب' },
+        { name: 'Isyak',   ts: todayData.isha,    enName: 'Isha',    arName: 'العشاء' }
+      ].map(p => ({ ...p, time: tsToTime(p.ts) }));
+
+      // Find next upcoming prayer (compare Unix timestamps)
+      const nowTs = Math.floor(Date.now() / 1000);
+      const next = prayers.find(p => p.ts > nowTs) || prayers[0]; // fallback: Subuh esok
+
+      const pn = document.getElementById('prayerName');
+      pn.dataset.ms = next.name;
+      pn.dataset.en = next.enName;
+      pn.dataset.ar = next.arName;
+      pn.textContent = currentLang === 'en' ? next.enName
+                     : currentLang === 'ar' ? next.arName
+                     : next.name;
       document.getElementById('prayerTime').textContent = next.time;
     } catch (err) {
       document.getElementById('prayerName').textContent = '—';
       document.getElementById('prayerTime').textContent = '—';
+      console.warn('Prayer time fetch failed:', err);
     }
   }
   loadPrayerTimes();
